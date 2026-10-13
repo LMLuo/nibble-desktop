@@ -1,0 +1,52 @@
+{
+  "name": "nibble-desktop",
+  "productName": "Nibble",
+  "version": "0.1.0",
+  "description": "Nibble 的 Windows 桌面伴生版：全局敲击空格 / 回车，像素小生物就在桌面上发起攻击",
+  "main": "main.js",
+  "author": "LMLuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LMLuo/nibble-desktop.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.github.lmluo.nibble-desktop",
+    "productName": "Nibble",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload-panel.js",
+      "preload-overlay.js",
+      "overlay/**/*",
+      "lib/**/*",
+      "media/**/*",
+      "assets/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.png"
+    },
+    "portable": {
+      "artifactName": "Nibble-Portable-${version}.exe"
+    }
+  }
+}

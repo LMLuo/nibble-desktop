@@ -1,0 +1,66 @@
+/* nibble-desktop 悬浮窗 —— 透明置顶穿透的桌面小生物 */
+@font-face {
+  font-family: 'NibblePixel';
+  src: url('../media/fonts/nibble-pixel.woff2') format('woff2');
+  font-display: block;
+}
+
+html, body {
+  margin: 0; padding: 0;
+  width: 100%; height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+  font-family: 'NibblePixel', ui-monospace, monospace;
+}
+
+#root { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+/* —— 场景区：玩家（左）与敌人（右），背景全透明 —— */
+#scene { position: relative; flex: 1 1 auto; }
+canvas { position: absolute; bottom: 6px; image-rendering: pixelated; }
+#player { left: 26px; width: 72px; height: 72px; }
+#enemy { right: 34px; width: 60px; height: 60px; }
+
+/* 敌人信息：名字 + 头顶 HP 条（稀有度着色） */
+#einfo {
+  position: absolute; right: 14px; top: 4px;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+}
+#ename { font-size: 10px; line-height: 12px; color: #efe3d2; text-shadow: 0 1px 0 rgba(0,0,0,.8); max-width: 150px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ehpwrap { display: block; width: 60px; height: 6px; background: rgba(0,0,0,.4); border: 1px solid rgba(239,227,210,.25); }
+#ehp { display: block; height: 100%; width: 100%; background: #A6C674; }
+
+/* 伤害飘字：像素数字，向上飘 */
+#dmg { position: absolute; right: 24px; bottom: 76px; font-size: 20px; line-height: 22px;
+  color: #FF6B6B; text-shadow: 0 2px 0 rgba(0,0,0,.85); pointer-events: none; }
+#dmg.crit { color: #FFD75E; }
+
+/* —— HUD 条：可拖动（悬停时），Lv + 经验条 + 连击徽标 —— */
+#hud {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px 3px; margin: 0 4px;
+  background: rgba(23, 18, 16, .78);
+  border: 1px solid rgba(216, 192, 138, .28);
+  border-bottom-width: 0;
+  -webkit-app-region: drag;
+  font-size: 12px; line-height: 14px; color: #efe3d2;
+}
+#expwrap { flex: 1 1 auto; display: block; height: 8px; background: rgba(0,0,0,.5);
+  border: 1px solid rgba(216,192,138,.3); }
+#exp { display: block; height: 100%; width: 0%; background: #FFB86B; }
+#combo { font-size: 12px; color: #FFD75E; }
+
+/* —— 日志行：最近一次战斗结果 —— */
+#log {
+  padding: 2px 12px 5px; margin: 0 4px 4px;
+  background: rgba(23, 18, 16, .78);
+  border: 1px solid rgba(216, 192, 138, .28);
+  border-top-width: 0;
+  font-size: 10px; line-height: 13px; color: #9a8b78;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.hidden { display: none !important; }

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Nibble</title>
+<link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+  <div id="root">
+    <div id="scene">
+      <div id="einfo">
+        <span id="ename">—</span>
+        <span id="ehpwrap"><i id="ehp"></i></span>
+      </div>
+      <canvas id="enemy" width="24" height="24"></canvas>
+      <canvas id="player" class="hot" width="24" height="24" title="点击打开 Nibble 面板"></canvas>
+      <div id="dmg" class="hidden"></div>
+    </div>
+    <div id="hud" class="hot">
+      <span id="lv">Lv 1</span>
+      <span id="expwrap"><i id="exp"></i></span>
+      <b id="combo" class="hidden">×10</b>
+    </div>
+    <div id="log">Nibble 待命中…</div>
+  </div>
+  <script src="overlay.js"></script>
+</body>
+</html>
