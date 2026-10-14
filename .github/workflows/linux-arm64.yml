@@ -53,8 +53,13 @@ jobs:
             mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1
             export PATH=/opt/node/bin:$PATH
 
-            # 只取 uiohook-napi 的源码来编译，不碰整个工程（速度快、不受工程依赖影响）
-            mkdir -p /work/.ci-build && cd /work/.ci-build
+            # 只取 uiohook-napi 的源码来编译。
+            # ⚠️ 沙箱必须放在 /tmp 且自带 package.json：npm 的工程根是「最近的 package.json」，
+            # 若在 /work 里跑，它会向上找到仓库的 package.json，把整个工程的依赖装进
+            # /work/node_modules（并改写根 package.json / package-lock.json，让后面的 npm ci 直接失败）。
+            rm -rf /tmp/ub && mkdir -p /tmp/ub /work/.ci-build
+            cd /tmp/ub
+            npm init -y >/dev/null
             npm install uiohook-napi@1.5.5 --ignore-scripts --no-audit --no-fund
             cd node_modules/uiohook-napi
             npx --yes node-gyp@10 rebuild --arch=arm64
