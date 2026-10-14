@@ -52,8 +52,10 @@ jobs:
             #   USE_EVDEV → linux/input.h（linux-libc-dev）
             # Xinerama.h、xcb/xkb.h、xkbcommon/* 都在未定义的宏里，不需要。
             # gcc 会带上 binutils（readelf / strings 用来自检）。
+            # ⚠️ libc6-dev 必须显式列出：它只是 gcc 的 Recommends，配 --no-install-recommends
+            #    时不会自动装上，缺了连 stdio.h / stdint.h 都找不到（libpthread.so 也在里头）。
             apt-get install -y --no-install-recommends --allow-unauthenticated \
-              gcc ca-certificates curl tar gzip file \
+              gcc libc6-dev ca-certificates curl tar gzip file \
               libx11-dev libxrandr-dev libxtst-dev libxt-dev linux-libc-dev
 
             # 源码沙箱放 /tmp，绝不碰仓库目录
