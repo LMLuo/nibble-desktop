@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>鼠标轨迹</title>
+<style>
+  @font-face {
+    font-family: 'NibblePixel';
+    src: url('../media/fonts/nibble-pixel.woff2') format('woff2');
+    font-display: block;
+  }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #171210; overflow: hidden; user-select: none;
+    font-family: 'NibblePixel', ui-monospace, monospace; color: #efe3d2;
+  }
+  #wrap { box-sizing: border-box; height: 100%; display: flex; flex-direction: column; border: 2px solid #3f3026; background: #171210; }
+  #tb {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    height: 28px; padding: 0 6px 0 10px; background: #211a15;
+    border-bottom: 2px solid #3f3026; cursor: move; font-size: 12px;
+  }
+  #tb b { font-weight: normal; color: #FFB86B; }
+  #x {
+    width: 24px; height: 20px; padding: 0;
+    background: #2a1a12; color: #ecdfcc;
+    border: 2px solid #4a2a18; border-bottom-width: 3px;
+    font-family: inherit; font-size: 11px; line-height: 1; cursor: pointer;
+  }
+  #x:hover { border-color: #8a5a2a; color: #ffe9c8; }
+  #x:active { transform: translateY(2px); border-bottom-width: 2px; }
+  #days { flex: 0 0 auto; display: flex; gap: 4px; padding: 5px 8px 3px; flex-wrap: wrap; }
+  .day {
+    padding: 1px 7px; font-size: 10px; line-height: 15px; cursor: pointer;
+    background: rgba(23, 18, 16, .82); color: #9a8b78;
+    border: 1px solid rgba(216, 192, 138, .3);
+    font-family: inherit;
+  }
+  .day:hover { border-color: #8a5a2a; color: #ffe9c8; }
+  .day.on { background: #d8c08a; color: #17110a; border-color: #d8c08a; }
+  #stage { flex: 1 1 auto; position: relative; padding: 4px 8px 0; }
+  #cv { display: block; }
+  #legend { flex: 0 0 auto; padding: 3px 10px 6px; font-size: 10px; color: #9a8b78; }
+  #legend i { font-style: normal; color: #FFB86B; }
+  #legend b { font-weight: normal; color: #FFD75E; }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="tb">
+      <span>鼠标轨迹 · <b id="dateLabel">--</b></span>
+      <button id="x" title="关闭">─</button>
+    </div>
+    <div id="days"></div>
+    <div id="stage"><canvas id="cv"></canvas></div>
+    <div id="legend">发光 = 经过/停留热度（越亮越常去） · <b>亮点</b> = 点击位置 · <i>细线</i> = 移动路径</div>
+  </div>
+  <script>
+    ;(function () {
+      const cv = document.getElementById('cv')
+      const daysEl = document.getElementById('days')
+      const dateLabel = document.getElementById('dateLabel')
+      const stage = document.getElementById('stage')
+      let currentDays = []
+      let currentDate = ''
+
+      function mixHex(a, b, t) {
+        const na = parseInt(a.replace('#', ''), 16)
+        const nb = parseInt(b.replace('#', ''), 16)
+        const r = Math.round(((na >> 16) & 255) + (((nb >> 16) & 255) - ((na >> 16) & 255)) * t)
+        const g = Math.round(((na >> 8) & 255) + (((nb >> 8) & 255) - ((na >> 8) & 255)) * t)
+        const bl = Math.round((na & 255) + ((nb & 255) - (na & 255)) * t)
+        return '#' + ((1 << 24) + (r << 16) + (g << 8) + bl).toString(16).slice(1)
+      }
+
+      function renderDays(days) {
+        currentDays = days || []
+        daysEl.textContent = ''
+        const today = new Date().toISOString().slice(0, 10)
+        for (const d of currentDays) {
+          const b = document.createElement('button')
+          b.className = 'day' + (d === currentDate ? ' on' : '')
+          b.textContent = d === today ? d.slice(5) + ' · 今天' : d.slice(5)
+          b.onclick = () => {
+            try {
+              window.nibbleOverlay.mouseDay(d)
+            } catch { /* 忽略 */ }
+          }
+          daysEl.appendChild(b)
+        }
+        if (!currentDays.length) {
+          const s = document.createElement('span')
+          s.style.cssText = 'font-size:10px;color:#9a8b78'
+          s.textContent = '（还没有记录——动动鼠标就会有）'
+          daysEl.appendChild(s)
+        }
+      }
+
+      function render(data) {
+        currentDate = data.date || ''
+        dateLabel.textContent = currentDate
+        renderDays(currentDays)
+        // 画布尺寸：按舞台实际大小（固定窗口，一次算好；DPR 取 1 保持清晰简化）
+        const cw = Math.max(200, stage.clientWidth - 16)
+        const ch = Math.max(120, stage.clientHeight - 6)
+        if (cv.width !== cw) cv.width = cw
+        if (cv.height !== ch) cv.height = ch
+        const ctx = cv.getContext('2d')
+        ctx.clearRect(0, 0, cw, ch)
+
+        const sw = (data.screen && data.screen.w) || 1920
+        const sh = (data.screen && data.screen.h) || 1080
+        const scale = Math.min(cw / sw, ch / sh)
+        const dw = sw * scale
+        const dh = sh * scale
+        const ox = (cw - dw) / 2
+        const oy = (ch - dh) / 2
+
+        // 屏幕轮廓 + 淡网格（每 128 屏幕像素一条）
+        ctx.fillStyle = 'rgba(255,255,255,.02)'
+        ctx.fillRect(ox, oy, dw, dh)
+        ctx.strokeStyle = 'rgba(216,192,138,.12)'
+        ctx.lineWidth = 1
+        for (let gx = 0; gx <= sw; gx += 128) {
+          const px = Math.round(ox + gx * scale) + 0.5
+          ctx.beginPath(); ctx.moveTo(px, oy); ctx.lineTo(px, oy + dh); ctx.stroke()
+        }
+        for (let gy = 0; gy <= sh; gy += 128) {
+          const py = Math.round(oy + gy * scale) + 0.5
+          ctx.beginPath(); ctx.moveTo(ox, py); ctx.lineTo(ox + dw, py); ctx.stroke()
+        }
+        ctx.strokeStyle = 'rgba(216,192,138,.35)'
+        ctx.strokeRect(Math.round(ox) + 0.5, Math.round(oy) + 0.5, Math.round(dw), Math.round(dh))
+
+        const cells = data.cells || {}
+        const path = data.path || []
+        const clicks = data.clicks || []
+
+        if (!Object.keys(cells).length && !path.length && !clicks.length) {
+          ctx.fillStyle = '#9a8b78'
+          ctx.font = '12px "NibblePixel", monospace'
+          ctx.textAlign = 'center'
+          ctx.fillText('这一天还没有记录', cw / 2, ch / 2)
+          return
+        }
+
+        // —— 1. 热力发光层（经过越多越亮；幂次映射让低热也可见）——
+        let maxCount = 1
+        for (const k in cells) maxCount = Math.max(maxCount, cells[k])
+        const cellPx = 16 * scale
+        for (const k in cells) {
+          const p = k.split(',')
+          const gx = Number(p[0]); const gy = Number(p[1])
+          if (!Number.isFinite(gx) || !Number.isFinite(gy)) continue
+          const t = Math.pow(Math.min(1, cells[k] / maxCount), 0.55)
+          ctx.globalAlpha = 0.10 + 0.80 * t
+          ctx.fillStyle = t > 0.66 ? '#FFD75E' : t > 0.33 ? '#FFB86B' : mixHex('#7A3A10', '#FFB86B', t * 3)
+          ctx.fillRect(ox + gx * cellPx, oy + gy * cellPx, cellPx + 0.5, cellPx + 0.5)
+        }
+
+        // —— 2. 移动路径：发光轨迹（多层描边：外晕 → 辉光 → 亮芯；Path2D 只构建一次）——
+        const step8 = 8 * scale
+        if (path.length > 1) {
+          const p = new Path2D()
+          for (let i = 0; i < path.length; i++) {
+            const px = ox + path[i][0] * step8
+            const py = oy + path[i][1] * step8
+            if (i === 0) p.moveTo(px, py)
+            else p.lineTo(px, py)
+          }
+          ctx.lineJoin = 'round'
+          ctx.lineCap = 'round'
+          const strokes = [
+            { w: 6, a: 0.05, c: '#FFB86B' }, // 外层光晕
+            { w: 4, a: 0.10, c: '#FFB86B' },
+            { w: 2.4, a: 0.18, c: '#FFD75E' },
+            { w: 1.2, a: 0.38, c: '#FFD75E' }, // 辉光
+            { w: 0.8, a: 0.70, c: '#FFF6D8' }, // 亮芯
+          ]
+          for (const s of strokes) {
+            ctx.globalAlpha = s.a
+            ctx.strokeStyle = s.c
+            ctx.lineWidth = s.w
+            ctx.stroke(p)
+          }
+        }
+
+        // —— 3. 点击亮点（光晕 + 核心；重复点击自然更亮）——
+        for (const c of clicks) {
+          const px = Math.round(ox + c[0] * scale)
+          const py = Math.round(oy + c[1] * scale)
+          ctx.globalAlpha = 0.22
+          ctx.fillStyle = '#FFF6D8'
+          ctx.fillRect(px - 3, py - 3, 6, 6)
+          ctx.globalAlpha = 0.95
+          ctx.fillRect(px - 1, py - 1, 3, 3)
+        }
+        ctx.globalAlpha = 1
+      }
+
+      window.addEventListener('message', (e) => {
+        const m = e.data || {}
+        if (m.type === 'mousemap-init') {
+          currentDays = m.days || []
+          render(m.data || {})
+          // init 里带的天数据可能为空（今天刚跑），保持显示即可
+          if (m.data && m.data.date) currentDate = m.data.date
+          renderDays(currentDays)
+        } else if (m.type === 'mousemap') {
+          render(m)
+        }
+      })
+
+      document.getElementById('x').addEventListener('click', () => {
+        try {
+          window.nibbleOverlay.closeMouseMap()
+        } catch { /* 忽略 */ }
+      })
+      // 除关闭按钮与日期按钮外，整窗可拖
+      let drag = false
+      document.addEventListener('mousedown', (e) => {
+        if (e.target.closest('#x') || e.target.closest('.day')) return
+        drag = true
+        e.preventDefault()
+      })
+      document.addEventListener('mousemove', (e) => {
+        if (drag) {
+          try {
+            window.nibbleOverlay.moveBy(e.movementX || 0, e.movementY || 0)
+          } catch { /* 忽略 */ }
+        }
+      })
+      document.addEventListener('mouseup', () => { drag = false })
+    })()
+  </script>
+</body>
+</html>
