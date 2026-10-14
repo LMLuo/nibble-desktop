@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>透明度</title>
+<style>
+  @font-face {
+    font-family: 'NibblePixel';
+    src: url('../media/fonts/nibble-pixel.woff2') format('woff2');
+    font-display: block;
+  }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #1b1512; overflow: hidden; user-select: none;
+    font-family: 'NibblePixel', ui-monospace, monospace;
+  }
+  #wrap {
+    box-sizing: border-box; height: 100%;
+    display: flex; align-items: center; gap: 8px; padding: 0 12px;
+    border: 2px solid #3f3026; cursor: move;
+  }
+  #lb { font-size: 12px; color: #efe3d2; flex: 0 0 auto; }
+  #r {
+    flex: 1 1 auto; height: 8px; cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+    background: rgba(216, 192, 138, .2);
+    border: 1px solid rgba(216, 192, 138, .35);
+  }
+  #r::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 18px;
+    background: #FFB86B; border: 1px solid #3f3026;
+  }
+  #v { flex: 0 0 auto; width: 30px; text-align: right; font-size: 12px; color: #d8c08a; }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <span id="lb">透明度</span>
+    <input id="r" type="range" min="1" max="100" step="1" value="100" title="1 ~ 100">
+    <b id="v">100</b>
+  </div>
+  <script>
+    ;(function () {
+      const r = document.getElementById('r')
+      const v = document.getElementById('v')
+      r.addEventListener('input', () => {
+        v.textContent = r.value
+        try {
+          window.nibbleOverlay.opacitySet(Number(r.value) / 100)
+        } catch { /* 忽略 */ }
+      })
+      // 除滑条外，整条可按住拖动（移动小窗）
+      let drag = false
+      document.addEventListener('mousedown', (e) => {
+        if (e.target === r) return
+        drag = true
+        e.preventDefault()
+      })
+      document.addEventListener('mousemove', (e) => {
+        if (drag) {
+          try {
+            window.nibbleOverlay.moveBy(e.movementX || 0, e.movementY || 0)
+          } catch { /* 忽略 */ }
+        }
+      })
+      document.addEventListener('mouseup', () => { drag = false })
+      // 初始值与实时同步（主进程 push → preload 转发）
+      window.addEventListener('message', (e) => {
+        const m = e.data || {}
+        if (m.type === 'opacity-init' && typeof m.v === 'number') {
+          const p = Math.max(1, Math.min(100, Math.round(m.v * 100)))
+          r.value = p
+          v.textContent = p
+        }
+      })
+    })()
+  </script>
+</body>
+</html>

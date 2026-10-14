@@ -1,7 +1,7 @@
 {
   "name": "nibble-desktop",
   "productName": "Nibble",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Nibble 的 Windows 桌面伴生版：全局敲击空格 / 回车，像素小生物就在桌面上发起攻击",
   "main": "main.js",
   "author": "LMLuo",
@@ -29,8 +29,7 @@
     },
     "files": [
       "main.js",
-      "preload-panel.js",
-      "preload-overlay.js",
+      "preload.js",
       "overlay/**/*",
       "lib/**/*",
       "media/**/*",
