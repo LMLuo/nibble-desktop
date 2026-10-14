@@ -66,8 +66,8 @@
       "executableName": "nibble",
       "extraFiles": [
         {
-          "from": "linux/README-Linux.txt",
-          "to": "README-Linux.txt"
+          "from": "linux/使用说明.md",
+          "to": "README-Linux.md"
         }
       ],
       "category": "Utility",

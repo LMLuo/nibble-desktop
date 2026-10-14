@@ -69,6 +69,8 @@ Linux 版与 Windows 版的运行时差异（都已在代码里处理，改动�
 
 交叉编译 arm64 时必须加 `-c.npmRebuild=false`（`npm run dist:linux:tgz:arm64` 已带）：`@electron/rebuild` 会尝试用 node-gyp 从源码交叉编译原生模块并直接报错，而 uiohook 本来是 N-API 预编译产物，不需要 rebuild。
 
+交给使用者的《使用说明》是 `linux/使用说明.md`：仓库里保持中文名（便于直接发送给用户），打包后由 `build.linux.extraFiles` 复制为包根的 **`README-Linux.md`** —— **包内必须是 ASCII 名**，因为 Windows 侧打包要走 MSYS2 的 GNU tar，中文文件名在那里会被转成乱码（实测 `使用说明.md` → `浣跨\224ㄨ�存\230\216.md`）。
+
 ⚠️ **已知限制：uiohook-napi 1.5.5 的 Linux 预编译产物不能用**。实测（`e_machine` + SHA256）：`prebuilds/linux-arm64/`、`linux-loong64/`、`linux-x64/` 三个文件**完全相同**，且都是 **x86-64** 二进制；它要求 **glibc ≥ 2.34**（官方 Electron 只要 2.25，见 `GLIBC_2.25` 引用）。后果：
 
 - arm64 机器（飞腾 / 鲲鹏）上，Electron 本体能启动，但全局按键监听加载失败；
