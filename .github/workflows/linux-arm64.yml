@@ -15,6 +15,13 @@ name: linux-arm64 native
 #   模块会引用 GLIBC_2.34+，在麒麟上照样加载失败。Debian 10 = glibc 2.28，产出的模块对
 #   glibc >= 2.28 的机器都可用（也就是绝大多数国产发行版与老服务器）。
 #
+# 为什么不走 node-gyp：
+#   Debian 10 只有 python 3.7，而 node-gyp 10 自带的 gyp 用了海象运算符（3.8+），直接
+#   SyntaxError。这里改成直接用 gcc 编译 —— 源文件 / 宏 / 链接库在 binding.gyp 里是写死的
+#   （Linux 分支：USE_XRANDR + USE_EVDEV + USE_XT，源码 src/lib/*.c + libuiohook/src/x11/*.c），
+#   模块注册用的是标准 NAPI_MODULE_INIT（不需要 node-gyp 生成任何东西）。
+#   因此容器里既不需要 node、也不需要 npm 与 python。
+#
 # 产物（在 Actions 页面的 Artifacts 里下载）：
 #   uiohook-arm64      —— 单独的原生模块，可用于替换任意 Linux arm64 包里的同名文件
 #   nibble-linux-arm64 —— 已替换好的完整 tar.gz 发行包
@@ -32,44 +39,57 @@ jobs:
       - uses: actions/checkout@v4
 
       # ---------------------------------------------------------------- 原生模块
-      - name: 在 Debian 10 容器里编译原生模块（glibc 2.28 兼容）
+      - name: 在 Debian 10 容器里用 gcc 编译原生模块（glibc 2.28 兼容）
         run: |
           docker run --rm -v "$PWD:/work" -w /work arm64v8/debian:buster bash -ec '
             set -e
             # Debian 10 已 EOL：包源迁到 archive.debian.org，签名也不再更新
             sed -i "s|deb.debian.org|archive.debian.org|g; /security.debian.org/d; /buster-updates/d" /etc/apt/sources.list
             apt-get -o Acquire::Check-Valid-Until=false -o Acquire::AllowInsecureRepositories=true update
-            # 只装编译 binding.gyp 里 Linux 分支真正用到的头文件：
-            #   USE_XRANDR → Xrandr.h      USE_XT → X11/Intrinsic.h
-            #   XRecord / XTest → libxtst  XKBlib / Xlibint / keysym → libx11
+            # 只装 binding.gyp 里 Linux 分支真正用得到的头文件：
+            #   USE_XRANDR → Xrandr.h        USE_XT      → X11/Intrinsic.h
+            #   XRecord / XTest → libxtst    XKBlib / Xlibint / keysym → libx11
             #   USE_EVDEV → linux/input.h（linux-libc-dev）
-            # Xinerama.h、xcb/xkb.h、xkbcommon/* 都在未定义的宏里，不需要
+            # Xinerama.h、xcb/xkb.h、xkbcommon/* 都在未定义的宏里，不需要。
+            # gcc 会带上 binutils（readelf / strings 用来自检）。
             apt-get install -y --no-install-recommends --allow-unauthenticated \
-              gcc make python3 ca-certificates curl xz-utils file \
+              gcc ca-certificates curl tar gzip file \
               libx11-dev libxrandr-dev libxtst-dev libxt-dev linux-libc-dev
 
-            # 容器本身没有 node，用官方 arm64 包（node-gyp 也复用它下载头文件）
-            curl -fsSL https://nodejs.org/dist/v20.18.1/node-v20.18.1-linux-arm64.tar.xz -o /tmp/node.tar.xz
-            mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1
-            export PATH=/opt/node/bin:$PATH
+            # 源码沙箱放 /tmp，绝不碰仓库目录
+            rm -rf /tmp/ub && mkdir -p /tmp/ub
+            curl -fsSL https://registry.npmjs.org/uiohook-napi/-/uiohook-napi-1.5.5.tgz -o /tmp/ub.tgz
+            tar -xzf /tmp/ub.tgz -C /tmp/ub --strip-components=1
 
-            # 只取 uiohook-napi 的源码来编译。
-            # ⚠️ 沙箱必须放在 /tmp 且自带 package.json：npm 的工程根是「最近的 package.json」，
-            # 若在 /work 里跑，它会向上找到仓库的 package.json，把整个工程的依赖装进
-            # /work/node_modules（并改写根 package.json / package-lock.json，让后面的 npm ci 直接失败）。
-            rm -rf /tmp/ub && mkdir -p /tmp/ub /work/.ci-build
+            # N-API 头文件（官方 headers 包，与架构无关）
+            curl -fsSL https://nodejs.org/dist/v20.18.1/node-v20.18.1-headers.tar.gz -o /tmp/nh.tgz
+            mkdir -p /opt/nh && tar -xzf /tmp/nh.tgz -C /opt/nh --strip-components=1
+
             cd /tmp/ub
-            npm init -y >/dev/null
-            npm install uiohook-napi@1.5.5 --ignore-scripts --no-audit --no-fund
-            cd node_modules/uiohook-napi
-            npx --yes node-gyp@10 rebuild --arch=arm64
+            gcc -shared -fPIC -O2 -std=c99 -Wall -pthread -D_GNU_SOURCE \
+              -DUSE_XRANDR -DUSE_EVDEV -DUSE_XT \
+              -I/opt/nh/include/node \
+              -Ilibuiohook/include -Isrc/lib -Ilibuiohook/src -Ilibuiohook/src/x11 \
+              src/lib/addon.c src/lib/napi_helpers.c src/lib/uiohook_worker.c \
+              libuiohook/src/logger.c \
+              libuiohook/src/x11/input_helper.c \
+              libuiohook/src/x11/input_hook.c \
+              libuiohook/src/x11/post_event.c \
+              libuiohook/src/x11/system_properties.c \
+              -o uiohook_napi.node \
+              -lX11 -lXrandr -lXtst -lpthread -lXt
 
-            cp build/Release/uiohook_napi.node /work/.ci-build/uiohook_napi.node
+            mkdir -p /work/.ci-build
+            cp uiohook_napi.node /work/.ci-build/uiohook_napi.node
+
             echo "=================== 产物自检 ==================="
             file /work/.ci-build/uiohook_napi.node
             readelf -h /work/.ci-build/uiohook_napi.node | grep -E "Class:|Machine:"
             echo -n "引用到的 GLIBC 版本上限: "
             strings /work/.ci-build/uiohook_napi.node | grep -E "^GLIBC_2\." | sort -uV | tail -1
+            echo -n "依赖的动态库: "
+            readelf -d /work/.ci-build/uiohook_napi.node | grep NEEDED | sed -E "s/.*\[(.*)\]/\1/" | tr "\n" " "
+            echo
             echo "==============================================="
           '
 
