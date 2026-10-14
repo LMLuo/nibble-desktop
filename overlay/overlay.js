@@ -15,6 +15,7 @@
   let lastLunge = false
   let dmg = { val: 0, ticks: 0 }
   let fullMode = false
+  let slowFrame = 0 // 慢速待机帧：每 12 个 tick 一个呼吸周期（约 1.2s），与攻击动画解耦
 
   const isFull = () => document.body.classList.contains('full')
 
@@ -52,11 +53,11 @@
   // ============================================================
   var THEMES = {
     common: { sky: '#C2D6E2', sky2: '#EEF3F3', far: '#ACBECE', hill: '#7C9C58', hillTop: '#93B26C',
-      ground: '#8FB061', groundTop: '#A6C674', grass: '#587A38' },
+      ground: '#8FB061', groundTop: '#A6C674', grass: '#587A38', accent: '#A6C674' },
     elite: { sky: '#241E30', sky2: '#4C4058', far: '#322C42', hill: '#3E4A42', hillTop: '#4E5C50',
-      ground: '#46524A', groundTop: '#56645A', star: '#c8bcd8' },
+      ground: '#46524A', groundTop: '#56645A', star: '#c8bcd8', accent: '#8AA898' },
     boss: { sky: '#180A0A', sky2: '#48190E', far: '#381412', hill: '#5A2016', hillTop: '#6E2A1A',
-      ground: '#6A2816', groundTop: '#8A3620', star: '#ff9a5a' },
+      ground: '#6A2816', groundTop: '#8A3620', star: '#ff9a5a', accent: '#FF8A3A' },
   }
   var lastSceneTier = null
 
@@ -78,7 +79,7 @@
     if (cv.height !== h) cv.height = h
     const ctx = cv.getContext('2d')
     const t = THEMES[tier] || THEMES.common
-    const g = Math.round(h * 0.72) // 地平线
+    const g = Math.round(h * 0.64) // 地平线（天空略矮，整体更紧凑）
     const mid = Math.round(g * 0.55)
 
     // 天空两带
@@ -121,6 +122,82 @@
     lastSceneTier = tier
   }
 
+  // ============================================================
+  // 连击光环（对齐插件版 drawAura）：≥10 连角色脚下的椭圆环
+  //   低档 = 主题色提亮 + 深色衬底；≥25 连 = 亮金 + 弧顶白高光 + 上升粒子
+  //   本窗口角色逻辑格 24、显示 72px → 1 格 = 3px（插件版坐标 ×3）
+  // ============================================================
+  function mixHex(a, b, t) {
+    const na = parseInt(String(a).replace('#', ''), 16)
+    const nb = parseInt(String(b).replace('#', ''), 16)
+    const r = Math.round(((na >> 16) & 255) + (((nb >> 16) & 255) - ((na >> 16) & 255)) * t)
+    const g = Math.round(((na >> 8) & 255) + (((nb >> 8) & 255) - ((na >> 8) & 255)) * t)
+    const bl = Math.round((na & 255) + ((nb & 255) - (na & 255)) * t)
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + bl).toString(16).slice(1)
+  }
+
+  function rgbaStr(hex, a) {
+    const h = String(hex || '#FFE066').replace('#', '')
+    const r = parseInt(h.slice(0, 2), 16)
+    const g = parseInt(h.slice(2, 4), 16)
+    const b = parseInt(h.slice(4, 6), 16)
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')'
+  }
+
+  function drawAura() {
+    const cv = $('o-aura')
+    if (!cv) return
+    const w = cv.parentElement.clientWidth
+    const h = cv.parentElement.clientHeight
+    if (!w || !h) return
+    if (cv.width !== w) cv.width = w
+    if (cv.height !== h) cv.height = h
+    const ctx = cv.getContext('2d')
+    ctx.clearRect(0, 0, w, h)
+    if (!state || !(state.streakTier > 0)) return
+    const T = THEMES[state.enemyTier] || THEMES.common
+    const gold = state.streakTier >= 2
+    const col = gold ? '#FFD75E' : mixHex(T.accent || '#A6C674', '#FFFFFF', 0.72)
+    const ink = gold ? '#5A3406' : mixHex(T.accent || '#A6C674', '#000000', 0.75)
+    const lit = '#FFF6D8'
+    const G = 3 // 1 逻辑格 = 3px
+    const cx = canvasP.offsetLeft + canvasP.offsetWidth / 2
+    const cy = h - 18 // 角色脚底（bottom 20 + 2）
+    const RX = gold ? 45 : 39
+    const RY = gold ? 12 : 11
+    const dot = (x, y, c) => {
+      ctx.fillStyle = ink
+      ctx.fillRect(x, y + G, G, G)
+      ctx.fillStyle = c
+      ctx.fillRect(x, y, G, G)
+    }
+    // 上弧：逐列满弧
+    for (let dx = -RX; dx <= RX; dx += G) {
+      const t = dx / RX
+      const yy = Math.sqrt(Math.max(0, 1 - t * t))
+      const y = cy - Math.round(yy * RY)
+      dot(Math.round(cx + dx), y, col)
+      if (gold && yy > 0.72) {
+        ctx.fillStyle = lit
+        ctx.fillRect(Math.round(cx + dx), y - G, G, G)
+      }
+    }
+    // 下弧：只补两侧（正下方被脚挡住）
+    for (let dx = -RX; dx <= RX; dx += G) {
+      if (Math.abs(dx) / RX < 0.45) continue
+      const t = dx / RX
+      const yy = Math.sqrt(Math.max(0, 1 - t * t))
+      const y = cy + Math.max(G, Math.round(yy * RY * 0.45))
+      dot(Math.round(cx + dx), y, col)
+    }
+    // 上升粒子：两侧（2 帧相位跳变）
+    const hi = tick.frame ? 1 : 0
+    const parts = gold
+      ? [[-33, 18 + hi * 3, col], [-42, 33, lit], [33, 15, lit], [42, 30 + hi * 3, col]]
+      : [[-30, 15 + hi * 3, col], [30, 21, col]]
+    for (const p of parts) dot(Math.round(cx + p[0]), cy - p[1], p[2])
+  }
+
   const enemyRatio = () => (state ? Math.max(0, state.hp) / Math.max(1, state.maxHp) : 1)
   const HP_COLORS = { ok: '#A6C674', mid: '#FFD75E', low: '#FF6B6B' }
   const hpColor = () => {
@@ -132,10 +209,12 @@
     if (!state) return
     // 玩家：攻击前冲 2px，待机隔帧下沉 1px
     const lunge = tick.lunge
-    drawSprite(canvasP, state.player, lunge ? 2 : 0, lunge ? 0 : (tick.frame ? 1 : 0), false)
-    // 敌人：击败消散隔帧闪烁；稀有/传说 = 透明度呼吸（绝不整只消失）
+    const slowHalf = (slowFrame % 12) < 6 // 慢速呼吸半周期（约 600ms 切换一次）
+    // 玩家：攻击前冲 2px（即时响应，不受慢帧影响）；待机 600ms 下沉 1px / 600ms 回位
+    drawSprite(canvasP, state.player, lunge ? 2 : 0, lunge ? 0 : (slowHalf ? 1 : 0), false)
+    // 敌人：击败消散每帧快闪（瞬时效果）；稀有/传说 = 慢速透明度呼吸（绝不整只消失）
     const enemyHidden = tick.dissolve && tick.frame % 2 === 0
-    drawSprite(canvasE, state.enemy, 0, 0, enemyHidden, tick.blink ? 0.65 : 1)
+    drawSprite(canvasE, state.enemy, 0, 0, enemyHidden, tick.blink ? (slowHalf ? 0.72 : 1) : 1)
     // 伤害飘字
     if (dmg.ticks > 0) {
       dmgEl.textContent = '-' + dmg.val
@@ -162,21 +241,24 @@
     } else {
       comboEl.classList.toggle('hidden', true)
     }
-    // 武器槽（对齐扩展装备槽）：恒显，未装备 = 灰态占位
+    // 武器槽（贴场景左侧：发光圆角格 + 下方名字战力，对齐插件版）
+    const wrap = $('o-wslotWrap')
     const slot = $('o-wslot')
     const hasW = !!state.weaponSprite
-    slot.classList.remove('hidden')
-    slot.classList.toggle('empty', !hasW)
-    slot.style.borderColor = hasW ? (state.weaponColor || 'rgba(216,192,138,.3)') : ''
+    wrap.classList.toggle('empty', !hasW)
+    slot.style.borderColor = hasW ? (state.weaponColor || 'rgba(216,192,138,.35)') : ''
+    slot.style.boxShadow = hasW ? '0 0 8px ' + rgbaStr(state.weaponColor, 0.35) : 'none'
     drawSprite($('o-wicon'), state.weaponSprite, 0, 0, !hasW)
-    $('o-wname').textContent = hasW ? state.weaponName + ' +' + (state.weaponPower || 0) + '%' : '未装备'
+    // 名字/战力只保留悬停提示（DOM 已移除名字节点）
     slot.title = hasW
       ? state.weaponName + ' · 战力 +' + (state.weaponPower || 0) + '% · 点击打开武器库'
       : '点击打开武器库'
-    // 战绩 hover 提示
-    $('o-hud').title = '攻击 ' + (state.battles || 0) + ' 次 · 击败 ' + (state.defeats || 0) + ' 次 · 连击 ×' + (state.streak || 0)
+    // 战绩 hover 提示（挂在玩家名牌上）
+    $('o-phud').title = '攻击 ' + (state.battles || 0) + ' 次 · 击败 ' + (state.defeats || 0) + ' 次 · 连击 ×' + (state.streak || 0)
     // 日志（去掉 emoji / 星号，同 pet.js 的处理）
-    $('o-log').textContent = (state.log || 'Nibble 待命中…').replace(/🆕|💚|🧬/g, '').replace(/\*\*/g, '')
+    $('o-logtext').textContent = (state.log || 'Nibble 待命中…').replace(/🆕|💚|🧬/g, '').replace(/\*\*/g, '')
+    // 连击光环（≥10 连）：画在角色脚下
+    drawAura()
   }
 
   function applyState(msg) {
@@ -205,6 +287,7 @@
       applyState(msg)
     } else if (msg.type === 'tick') {
       tick = msg
+      slowFrame = (slowFrame + 1) % 12
       if (dmg.ticks > 0) dmg.ticks--
       // 攻击上升沿 → 弹伤害飘字（0 = 未命中，跳过）
       if (msg.lunge && !lastLunge && state && state.lastDmg > 0) {
@@ -221,6 +304,8 @@
       render()
     } else if (msg.type === 'mode') {
       setMode(!!msg.full, msg.opacity)
+    } else if (msg.type === 'keystats') {
+      renderKeyCount(msg.today)
     }
     // view：由 pet.js 处理（切武器库/怪物库 tab）；drop / burst：紧凑层不重复演出
   }
@@ -238,6 +323,7 @@
     if (!target || !target.closest) return null
     if (target.closest('#o-player')) return 'panel'
     if (target.closest('#o-wslot')) return 'arsenal'
+    if (target.closest('#o-keycount')) return 'keystats'
     if (target.closest('#o-open-arsenal')) return 'arsenal'
     if (target.closest('#o-open-bestiary')) return 'bestiary'
     return null
@@ -248,7 +334,16 @@
       if (action === 'panel') window.nibbleOverlay.openPanel()
       else if (action === 'arsenal') window.nibbleOverlay.openView('arsenal')
       else if (action === 'bestiary') window.nibbleOverlay.openView('bestiary')
+      else if (action === 'keystats') window.nibbleOverlay.openKeyStats()
     } catch { /* 忽略 */ }
+  }
+
+  // 今日敲击计数器（悬浮日志）
+  function renderKeyCount(today) {
+    const el = $('o-keycount')
+    if (!el || !today) return
+    el.innerHTML = '空 <b>' + (today.space || 0) + '</b> 车 <b>' + (today.enter || 0) + '</b>'
+    el.title = '今日敲击：空格 ' + (today.space || 0) + ' · 回车 ' + (today.enter || 0) + ' · 点击看近 7 天'
   }
 
   document.addEventListener('mousedown', (e) => {

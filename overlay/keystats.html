@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>按键统计</title>
+<style>
+  @font-face {
+    font-family: 'NibblePixel';
+    src: url('../media/fonts/nibble-pixel.woff2') format('woff2');
+    font-display: block;
+  }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #1b1512; overflow: hidden; user-select: none;
+    font-family: 'NibblePixel', ui-monospace, monospace;
+    color: #efe3d2;
+  }
+  #wrap { box-sizing: border-box; height: 100%; display: flex; flex-direction: column; border: 2px solid #3f3026; }
+  #tb {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    height: 28px; padding: 0 6px 0 10px; background: #211a15;
+    border-bottom: 2px solid #3f3026; cursor: move; font-size: 12px;
+  }
+  #x {
+    width: 24px; height: 20px; padding: 0;
+    background: #2a1a12; color: #ecdfcc;
+    border: 2px solid #4a2a18; border-bottom-width: 3px;
+    font-family: inherit; font-size: 11px; line-height: 1; cursor: pointer;
+  }
+  #x:hover { border-color: #8a5a2a; color: #ffe9c8; }
+  #x:active { transform: translateY(2px); border-bottom-width: 2px; }
+  #cols { flex: 0 0 auto; display: flex; padding: 6px 12px 3px; font-size: 10px; color: #9a8b78; }
+  #cols span:nth-child(1) { flex: 1 1 auto; }
+  #cols span:nth-child(2), #cols span:nth-child(3) { flex: 0 0 64px; text-align: right; }
+  #rows { flex: 1 1 auto; overflow-y: auto; padding: 0 12px 8px; }
+  #rows::-webkit-scrollbar { width: 8px; }
+  #rows::-webkit-scrollbar-thumb { background: #3f3026; border: 1px solid #5a4636; }
+  .row { display: flex; padding: 2px 0; font-size: 11px; line-height: 15px; }
+  .row span:nth-child(1) { flex: 1 1 auto; color: #9a8b78; }
+  .row span:nth-child(2), .row span:nth-child(3) { flex: 0 0 64px; text-align: right; color: #d8c08a; }
+  .row.today span:nth-child(1) { color: #FFB86B; }
+  .row.today span:nth-child(2), .row.today span:nth-child(3) { color: #FFD75E; }
+  .row .sep { color: #9a8b78; }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="tb">
+      <span>按键统计 · 近 7 天</span>
+      <button id="x" title="关闭">─</button>
+    </div>
+    <div id="cols"><span>日期</span><span>空格</span><span>回车</span></div>
+    <div id="rows"></div>
+  </div>
+  <script>
+    ;(function () {
+      const rowsEl = document.getElementById('rows')
+      const todayStr = new Date().toISOString().slice(0, 10)
+      function render(days) {
+        rowsEl.textContent = ''
+        if (!days || !days.length) {
+          const d = document.createElement('div')
+          d.className = 'row'
+          d.textContent = '还没有记录——敲几个空格试试'
+          rowsEl.appendChild(d)
+          return
+        }
+        for (const d of days) {
+          const row = document.createElement('div')
+          row.className = 'row' + (d.date === todayStr ? ' today' : '')
+          const mmdd = d.date.slice(5)
+          const label = d.date === todayStr ? mmdd + ' · 今天' : mmdd
+          row.innerHTML = '<span>' + label + '</span><span>' + (d.space || 0) + '</span><span>' + (d.enter || 0) + '</span>'
+          rowsEl.appendChild(row)
+        }
+      }
+      window.addEventListener('message', (e) => {
+        const m = e.data || {}
+        if (m.type === 'keystats-all') render(m.days)
+      })
+      document.getElementById('x').addEventListener('click', () => {
+        try {
+          window.nibbleOverlay.closeKeyStats()
+        } catch { /* 忽略 */ }
+      })
+      // 除关闭按钮外，整窗可按住拖动
+      let drag = false
+      document.addEventListener('mousedown', (e) => {
+        if (e.target.closest('#x')) return
+        drag = true
+        e.preventDefault()
+      })
+      document.addEventListener('mousemove', (e) => {
+        if (drag) {
+          try {
+            window.nibbleOverlay.moveBy(e.movementX || 0, e.movementY || 0)
+          } catch { /* 忽略 */ }
+        }
+      })
+      document.addEventListener('mouseup', () => { drag = false })
+    })()
+  </script>
+</body>
+</html>

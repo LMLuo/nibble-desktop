@@ -68,75 +68,90 @@ body:not(.full) #full { display: none; }
 #fullBody::-webkit-scrollbar-thumb { background: #3f3026; border: 1px solid #5a4636; }
 #fullBody::-webkit-scrollbar-thumb:hover { background: #8a5a2a; }
 
-/* ==================== 紧凑层：迷你战斗舞台 ==================== */
-/* 场景区：像素背景 + 敌我生物 + 直达按钮（整窗可拖，按钮原地点击） */
+/* ==================== 紧凑层：迷你战斗舞台（布局对齐插件版场景） ==================== */
+/* 场景区：像素背景 + 连击光环 + 玩家名牌（左上）/ 敌人名牌（右上）/ 武器槽（左侧） */
 #o-scene { position: relative; flex: 1 1 auto; overflow: hidden; }
 #o-bg { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+/* 连击光环层：铺满场景、压在角色与前景之下，不挡点击 */
+#o-aura { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; pointer-events: none; }
 
-/* 直达按钮（左上角横排） */
-#o-quick { position: absolute; left: 6px; top: 6px; display: flex; gap: 4px; z-index: 5; }
+#o-scene > canvas { position: absolute; image-rendering: pixelated; }
+/* 主角位置（右移 18px 微调；连击光环自动跟随） */
+#o-player { left: 44px; bottom: 20px; width: 72px; height: 72px; }
+#o-enemy { right: 34px; bottom: 20px; width: 60px; height: 60px; }
+
+/* 玩家名牌：主角头顶正上方——容器宽度自适应内容、严格居中于主角（不再溢出边框） */
+#o-phud {
+  position: absolute; left: 80px; bottom: 94px; transform: translateX(-50%);
+  max-width: 150px; z-index: 4;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 2px 6px 3px;
+  background: rgba(12, 9, 8, .62);
+  border: 2px solid rgba(255, 184, 107, .55);
+  box-sizing: border-box;
+}
+#o-pname { font-size: 11px; line-height: 13px; color: #f6ecda;
+  white-space: nowrap; text-align: center; } /* 不截断，居中于主角 */
+#o-pname b { font-weight: normal; color: #FFB86B; }
+#o-combo { color: #FFD75E; margin-left: 4px; }
+#o-expwrap { display: block; width: 56px; height: 6px; background: rgba(0,0,0,.55);
+  border: 1px solid rgba(216,192,138,.35); }
+#o-exp { display: block; height: 100%; width: 0%; background: #FFB86B; }
+
+/* 敌人信息：贴在怪物正上方（与怪物同宽对齐居中）——名字 + HP 条 */
+#o-einfo {
+  position: absolute; right: 34px; bottom: 84px; width: 60px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+#o-ename { font-size: 10px; line-height: 12px; color: #fff;
+  text-shadow: 0 1px 0 rgba(0,0,0,.9), 1px 0 0 rgba(0,0,0,.9), 0 -1px 0 rgba(0,0,0,.9), -1px 0 0 rgba(0,0,0,.9);
+  white-space: nowrap; text-align: center; } /* 不截断，向两侧溢出以保持居中于怪物 */
+#o-ehpwrap { display: block; width: 60px; height: 6px; background: rgba(0,0,0,.55); border: 1px solid rgba(0,0,0,.6); }
+#o-ehp { display: block; height: 100%; width: 100%; background: #A6C674; }
+
+/* 伤害飘字：怪物头顶（HP 条上方） */
+#o-dmg { position: absolute; right: 34px; bottom: 108px; width: 60px; text-align: center;
+  font-size: 20px; line-height: 22px;
+  color: #FF6B6B; text-shadow: 0 2px 0 rgba(0,0,0,.9); pointer-events: none; }
+#o-dmg.crit { color: #FFD75E; }
+
+/* 武器槽（场景左下角落：发光小格，仅图标；名字/战力见悬停提示） */
+#o-wslotWrap {
+  position: absolute; left: 0; bottom: 6px; z-index: 4;
+  display: flex; align-items: center;
+}
+#o-wslot {
+  width: 28px; height: 28px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(12, 9, 8, .55);
+  border: 2px solid rgba(216, 192, 138, .35); /* 稀有度色由 JS 覆盖 */
+  border-radius: 5px;
+  cursor: pointer;
+}
+#o-wslot canvas { width: 18px; height: 18px; image-rendering: pixelated; }
+#o-wslot:hover { border-color: #8a5a2a; }
+#o-wslotWrap.empty #o-wname { color: #9a8b78; }
+#o-wslotWrap.empty #o-wslot { border-color: rgba(216, 192, 138, .25); }
+
+/* 日志行 + 右侧快捷按钮（武器库 / 怪物库） */
+#o-log {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px 4px 10px;
+  border-top: 1px solid rgba(216, 192, 138, .15);
+  font-size: 10px; line-height: 13px; color: #9a8b78;
+}
+#o-logtext { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 今日敲击计数器（悬浮日志）：点击打开近 7 天明细 */
+#o-keycount { flex: 0 0 auto; font-size: 9px; color: #9a8b78; cursor: pointer; white-space: nowrap; }
+#o-keycount b { font-weight: normal; color: #d8c08a; }
+#o-keycount:hover { color: #ffe9c8; }
+#o-quick { display: inline-flex; gap: 4px; flex: 0 0 auto; }
 #o-quick button {
-  padding: 1px 6px; font-size: 10px; line-height: 14px;
+  padding: 0 5px; font-size: 10px; line-height: 14px;
   background: rgba(23, 18, 16, .82); color: #d8c08a;
   border: 1px solid rgba(216, 192, 138, .4);
   font-family: 'NibblePixel', ui-monospace, monospace; cursor: pointer;
 }
 #o-quick button:hover { border-color: #8a5a2a; color: #ffe9c8; }
-
-#o-scene > canvas { position: absolute; image-rendering: pixelated; }
-#o-player { left: 26px; bottom: 20px; width: 72px; height: 72px; }
-#o-enemy { right: 34px; bottom: 20px; width: 60px; height: 60px; }
-
-/* 敌人信息：名字 + 头顶 HP 条 */
-#o-einfo {
-  position: absolute; right: 14px; top: 6px;
-  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
-}
-#o-ename { font-size: 10px; line-height: 12px; color: #fff;
-  text-shadow: 0 1px 0 rgba(0,0,0,.9), 1px 0 0 rgba(0,0,0,.9), 0 -1px 0 rgba(0,0,0,.9), -1px 0 0 rgba(0,0,0,.9);
-  max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#o-ehpwrap { display: block; width: 60px; height: 6px; background: rgba(0,0,0,.55); border: 1px solid rgba(0,0,0,.6); }
-#o-ehp { display: block; height: 100%; width: 100%; background: #A6C674; }
-
-/* 伤害飘字 */
-#o-dmg { position: absolute; right: 24px; bottom: 92px; font-size: 20px; line-height: 22px;
-  color: #FF6B6B; text-shadow: 0 2px 0 rgba(0,0,0,.9); pointer-events: none; }
-#o-dmg.crit { color: #FFD75E; }
-
-/* HUD 条：拖动把手 + 武器槽 */
-#o-hud {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 10px 3px;
-  border-top: 2px solid #3f3026;
-  background: rgba(12, 9, 8, .35);
-  cursor: move;
-  font-size: 12px; line-height: 14px; color: #efe3d2;
-}
-#o-expwrap { flex: 1 1 auto; display: block; height: 8px; background: rgba(0,0,0,.5);
-  border: 1px solid rgba(216,192,138,.3); }
-#o-exp { display: block; height: 100%; width: 0%; background: #FFB86B; }
-#o-combo { font-size: 12px; color: #FFD75E; }
-
-/* 武器槽 */
-#o-wslot {
-  display: inline-flex; align-items: center; gap: 3px;
-  flex: 0 0 auto; padding: 1px 4px 1px 2px;
-  border: 1px solid rgba(216,192,138,.3);
-  background: rgba(0,0,0,.35);
-  cursor: pointer;
-}
-#o-wslot canvas { width: 18px; height: 18px; image-rendering: pixelated; }
-#o-wslot em { font-style: normal; font-size: 10px; line-height: 12px; color: #d8c08a;
-  max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#o-wslot.empty em { color: #9a8b78; }
-#o-wslot:hover { border-color: #8a5a2a; }
-
-/* 日志行 */
-#o-log {
-  padding: 3px 10px 5px;
-  border-top: 1px solid rgba(216, 192, 138, .15);
-  font-size: 10px; line-height: 13px; color: #9a8b78;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 
 .hidden { display: none !important; }

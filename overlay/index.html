@@ -98,32 +98,39 @@
 </style>
 </head>
 <body>
-  <!-- ==================== 紧凑层：迷你战斗舞台（穿透） ==================== -->
+  <!-- ==================== 紧凑层：迷你战斗舞台 ====================
+       布局对齐插件版场景：玩家名牌（左上）/ 敌人名牌（右上）/
+       武器槽贴场景左侧（发光圆角格 + 名字战力在下方）/ 连击光环（角色脚下）
+       快捷按钮挪到日志行右侧（不占场景） -->
   <div id="compact">
     <div id="o-scene">
       <canvas id="o-bg"></canvas>
-      <div id="o-quick">
-        <button id="o-open-arsenal" title="武器库">武器库</button>
-        <button id="o-open-bestiary" title="怪物库">怪物库</button>
+      <canvas id="o-aura"></canvas>
+      <div id="o-phud" class="hot">
+        <span id="o-pname">拾玖 <b id="o-lv">Lv 1</b><b id="o-combo" class="hidden">×10</b></span>
+        <span id="o-expwrap"><i id="o-exp"></i></span>
       </div>
       <div id="o-einfo">
         <span id="o-ename">—</span>
         <span id="o-ehpwrap"><i id="o-ehp"></i></span>
       </div>
+      <div id="o-wslotWrap" class="hot">
+        <div id="o-wslot" title="点击打开武器库">
+          <canvas id="o-wicon" width="24" height="24"></canvas>
+        </div>
+      </div>
       <canvas id="o-enemy" width="24" height="24"></canvas>
-      <canvas id="o-player" width="24" height="24" title="点击展开面板 · 滚轮调透明度"></canvas>
+      <canvas id="o-player" width="24" height="24" title="点击打开面板 · 滚轮调透明度"></canvas>
       <div id="o-dmg" class="hidden"></div>
     </div>
-    <div id="o-hud">
-      <span id="o-lv">Lv 1</span>
-      <span id="o-expwrap"><i id="o-exp"></i></span>
-      <b id="o-combo" class="hidden">×10</b>
-      <span id="o-wslot" title="点击打开武器库">
-        <canvas id="o-wicon" width="24" height="24"></canvas>
-        <em id="o-wname">未装备</em>
+    <div id="o-log">
+      <span id="o-logtext">Nibble 待命中…</span>
+      <span id="o-keycount" title="今日敲击（空格 / 回车）· 点击看近 7 天">空 <b>0</b> 车 <b>0</b></span>
+      <span id="o-quick">
+        <button id="o-open-arsenal" title="武器库">武器库</button>
+        <button id="o-open-bestiary" title="怪物库">怪物库</button>
       </span>
     </div>
-    <div id="o-log">Nibble 待命中…</div>
   </div>
 
   <!-- ==================== 展开层：完整面板（战斗 / 武器库 / 怪物库） ====================

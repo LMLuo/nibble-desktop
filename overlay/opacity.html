@@ -32,6 +32,14 @@
     background: #FFB86B; border: 1px solid #3f3026;
   }
   #v { flex: 0 0 auto; width: 30px; text-align: right; font-size: 12px; color: #d8c08a; }
+  #x {
+    flex: 0 0 auto; width: 20px; height: 20px; padding: 0;
+    background: #2a1a12; color: #ecdfcc;
+    border: 2px solid #4a2a18; border-bottom-width: 3px;
+    font-family: inherit; font-size: 11px; line-height: 1; cursor: pointer;
+  }
+  #x:hover { border-color: #8a5a2a; color: #ffe9c8; }
+  #x:active { transform: translateY(2px); border-bottom-width: 2px; }
 </style>
 </head>
 <body>
@@ -39,6 +47,7 @@
     <span id="lb">透明度</span>
     <input id="r" type="range" min="1" max="100" step="1" value="100" title="1 ~ 100">
     <b id="v">100</b>
+    <button id="x" title="关闭">─</button>
   </div>
   <script>
     ;(function () {
@@ -50,10 +59,16 @@
           window.nibbleOverlay.opacitySet(Number(r.value) / 100)
         } catch { /* 忽略 */ }
       })
-      // 除滑条外，整条可按住拖动（移动小窗）
+      // 关闭按钮
+      document.getElementById('x').addEventListener('click', () => {
+        try {
+          window.nibbleOverlay.closeOpacity()
+        } catch { /* 忽略 */ }
+      })
+      // 除滑条与关闭按钮外，整条可按住拖动（移动小窗）
       let drag = false
       document.addEventListener('mousedown', (e) => {
-        if (e.target === r) return
+        if (e.target === r || e.target.closest('#x')) return
         drag = true
         e.preventDefault()
       })

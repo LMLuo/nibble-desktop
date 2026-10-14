@@ -72,6 +72,59 @@ let tray = null
 let paused = false // 托盘「暂停键盘攻击」（只停键盘通道，手动攻击不受影响）
 let quitting = false
 
+// ============================ 按键统计（悬浮日志） ============================
+// 记录每天敲了多少空格 / 回车（userData/keystats.json）；
+// 内存计数 + 30s 防抖落盘 + 退出落盘；滚动保留 7 天。
+// 口径：长按自动重复不算敲击；托盘「暂停键盘攻击」期间不计数（整块键盘响应关闭）。
+const KEYSTAT_KEEP_DAYS = 7
+const keyStats = { days: {} } // { 'YYYY-MM-DD': { space, enter } }
+let keyStatsDirty = false
+const keyStatsPath = () => path.join(app.getPath('userData'), 'keystats.json')
+
+function todayKey() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+}
+
+function pruneKeyStats() {
+  const keys = Object.keys(keyStats.days).sort().reverse()
+  for (let i = KEYSTAT_KEEP_DAYS; i < keys.length; i++) delete keyStats.days[keys[i]]
+}
+
+function loadKeyStats() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(keyStatsPath(), 'utf8'))
+    if (parsed && parsed.days && typeof parsed.days === 'object') keyStats.days = parsed.days
+  } catch { /* 首次 / 损坏 → 空 */ }
+  pruneKeyStats()
+}
+
+function saveKeyStatsIfDirty() {
+  if (!keyStatsDirty) return
+  keyStatsDirty = false
+  try {
+    pruneKeyStats()
+    fs.writeFileSync(keyStatsPath(), JSON.stringify(keyStats, null, 2), 'utf8')
+  } catch { /* 忽略 */ }
+}
+
+function bumpKeyStat(kind) {
+  const day = todayKey()
+  const rec = keyStats.days[day] || (keyStats.days[day] = { space: 0, enter: 0 })
+  rec[kind] = (Number(rec[kind]) || 0) + 1
+  keyStatsDirty = true
+  broadcast({ type: 'keystats', today: { date: day, space: rec.space, enter: rec.enter } })
+}
+
+// 近 7 天明细（新→旧），供统计浮窗使用
+function keyStatsAll() {
+  const days = Object.keys(keyStats.days).sort().reverse()
+    .map((d) => ({ date: d, space: Number(keyStats.days[d].space) || 0, enter: Number(keyStats.days[d].enter) || 0 }))
+  const today = days.find((d) => d.date === todayKey())
+  return { type: 'keystats-all', days, today: today || { date: todayKey(), space: 0, enter: 0 } }
+}
+
 // ============================ 全局键盘监听 ============================
 let hook = null
 let attackKeys = null
@@ -87,6 +140,8 @@ function startHook() {
       if (!attackKeys.has(e.keycode)) return
       if (pressed.has(e.keycode)) return
       pressed.add(e.keycode)
+      if (paused) return // 暂停 = 整块键盘响应关闭（攻击 + 统计都不算）
+      bumpKeyStat(e.keycode === uio.UiohookKey.Space ? 'space' : 'enter')
       keyboardAttack()
     })
     hook.on('keyup', (e) => pressed.delete(e.keycode))
@@ -293,7 +348,7 @@ function tick() {
 
 // ============================ 悬浮窗（桌面小生物） ============================
 const OVERLAY_W = 300
-const OVERLAY_H = 220
+const OVERLAY_H = 200
 
 function posFile() {
   return path.join(app.getPath('userData'), 'overlay-pos.json')
@@ -455,6 +510,11 @@ function setOverlayOpacity(v) {
 }
 ipcMain.on('overlay-opacity-set', (_e, v) => setOverlayOpacity(v))
 ipcMain.on('overlay-opacity-delta', (_e, d) => setOverlayOpacity((Number(config.overlayOpacity) || 1) + (Number(d) || 0)))
+ipcMain.on('overlay-opacity-close', () => {
+  try {
+    if (opacityWin && !opacityWin.isDestroyed()) opacityWin.close()
+  } catch { /* 忽略 */ }
+})
 
 // —— 透明度小滑条窗（托盘「透明度」入口）：1~100 实时拖动 ——
 let opacityWin = null
@@ -497,6 +557,54 @@ function toggleOpacityWindow() {
     opacityWin.on('closed', () => { opacityWin = null })
   } catch { /* 忽略 */ }
 }
+
+// —— 按键统计浮窗（近 7 天明细）：托盘入口 / 点悬浮窗计数器 ——
+let keyStatsWin = null
+function toggleKeyStatsWindow() {
+  try {
+    if (keyStatsWin && !keyStatsWin.isDestroyed()) {
+      keyStatsWin.close()
+      return
+    }
+    const wa = screen.getPrimaryDisplay().workArea
+    const b = overlayWin && !overlayWin.isDestroyed() ? overlayWin.getBounds() : defaultOverlayBounds()
+    let x = b.x + b.width - 250 // 与悬浮窗右缘对齐
+    let y = b.y - 208 - 4 // 悬浮窗正上方
+    if (y < wa.y) y = b.y + b.height + 4
+    x = Math.min(Math.max(x, wa.x), wa.x + wa.width - 250)
+    keyStatsWin = new BrowserWindow({
+      width: 250,
+      height: 208,
+      x,
+      y,
+      frame: false,
+      backgroundColor: '#1b1512',
+      resizable: false,
+      alwaysOnTop: config.alwaysOnTop !== false,
+      skipTaskbar: true,
+      hasShadow: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+    keyStatsWin.setAlwaysOnTop(config.alwaysOnTop !== false, 'screen-saver')
+    keyStatsWin.loadFile(path.join(__dirname, 'overlay', 'keystats.html'))
+    keyStatsWin.webContents.on('did-finish-load', () => {
+      try {
+        keyStatsWin.webContents.send('push', keyStatsAll())
+      } catch { /* 忽略 */ }
+    })
+    keyStatsWin.on('closed', () => { keyStatsWin = null })
+  } catch { /* 忽略 */ }
+}
+ipcMain.on('overlay-keystats-open', () => toggleKeyStatsWindow())
+ipcMain.on('overlay-keystats-close', () => {
+  try {
+    if (keyStatsWin && !keyStatsWin.isDestroyed()) keyStatsWin.close()
+  } catch { /* 忽略 */ }
+})
 
 // ============================ 托盘 ============================
 const exeForLogin = () => process.env.PORTABLE_EXECUTABLE_FILE || app.getPath('exe')
@@ -562,6 +670,7 @@ function trayMenu() {
       },
     },
     { label: '透明度调节…', click: () => toggleOpacityWindow() },
+    { label: '按键统计…', click: () => toggleKeyStatsWindow() },
     {
       label: '暂停键盘攻击（空格 / 回车）',
       type: 'checkbox',
@@ -693,7 +802,14 @@ ipcMain.on('overlay-move-end', (e) => {
 ipcMain.on('overlay-ready', () => {
   lastKey = ''
   tick()
+  pushKeyStatsToday() // 计数器初值（今天可能已有存量计数）
 })
+
+function pushKeyStatsToday() {
+  const day = todayKey()
+  const rec = keyStats.days[day] || { space: 0, enter: 0 }
+  broadcast({ type: 'keystats', today: { date: day, space: Number(rec.space) || 0, enter: Number(rec.enter) || 0 } })
+}
 
 // ============================ 生命周期 ============================
 const gotLock = app.requestSingleInstanceLock()
@@ -708,6 +824,8 @@ if (!gotLock && !diagOn) {
 
   app.whenReady().then(() => {
     loadConfig()
+    loadKeyStats()
+    setInterval(saveKeyStatsIfDirty, 30000) // 计数防抖落盘
     createOverlay()
     createTray()
     startHook()
@@ -735,6 +853,13 @@ if (!gotLock && !diagOn) {
     // 6 秒后截屏（验证紧凑态/展开态是否真的渲染），随后退出
     if (diagOn) {
       diagLog('diag start (expand=' + (process.env.NIBBLE_DIAG_EXPAND || 'none') + ')')
+      // 模拟敲击：验证 计数 → 广播 → 计数器渲染 全链路
+      setTimeout(() => {
+        bumpKeyStat('space')
+        bumpKeyStat('space')
+        bumpKeyStat('enter')
+        diagLog('bumpKeyStat x3 done')
+      }, 2000)
       const expandTarget = process.env.NIBBLE_DIAG_EXPAND
       if (expandTarget) {
         setTimeout(() => {
@@ -766,13 +891,17 @@ if (!gotLock && !diagOn) {
               return JSON.stringify({
                 fullClass: document.body.classList.contains('full'),
                 compact: box(q('compact')),
-                full: box(q('full')),
-                fb: box(q('fullBody')),
-                arsenal: box(q('arsenalView')),
-                bestiary: box(q('bestiaryView')),
-                battle: box(q('battleView')),
-                cells: document.querySelectorAll('#agroups .wcell').length,
-                bcells: document.querySelectorAll('#bgroups .wcell').length,
+                phud: box(q('o-phud')),
+                wslot: box(q('o-wslot')),
+                aura: box(q('o-aura')),
+                logtext: box(q('o-logtext')),
+                quick: box(q('o-quick')),
+                player: box(q('o-player')),
+                enemy: box(q('o-enemy')),
+                lvText: (q('o-lv') || {}).textContent || '',
+                wnameText: (q('o-wname') || {}).textContent || '',
+                logText: (q('o-logtext') || {}).textContent || '',
+                keycountText: (q('o-keycount') || {}).textContent || '',
                 win: { w: innerWidth, h: innerHeight }
               })
             })()`)
@@ -822,6 +951,7 @@ if (!gotLock && !diagOn) {
 
   app.on('before-quit', () => {
     quitting = true
+    saveKeyStatsIfDirty() // 退出前落盘未保存的敲击计数
     try {
       if (hook) hook.stop()
     } catch { /* 忽略 */ }

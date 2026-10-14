@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('nibbleOverlay', {
   moveEnd: () => ipcRenderer.send('overlay-move-end'), // 拖动结束：保存位置
   opacitySet: (v) => ipcRenderer.send('overlay-opacity-set', v), // 透明度绝对设置（滑条）
   opacityDelta: (d) => ipcRenderer.send('overlay-opacity-delta', d), // 透明度增量（滚轮）
+  closeOpacity: () => ipcRenderer.send('overlay-opacity-close'), // 关闭透明度小窗
+  openKeyStats: () => ipcRenderer.send('overlay-keystats-open'), // 打开按键统计浮窗
+  closeKeyStats: () => ipcRenderer.send('overlay-keystats-close'), // 关闭按键统计浮窗
   ready: () => ipcRenderer.send('overlay-ready'),
 })
 
