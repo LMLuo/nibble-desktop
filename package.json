@@ -12,7 +12,10 @@
   },
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable"
+    "dist": "electron-builder --win portable",
+    "dist:linux": "electron-builder --linux AppImage tar.gz",
+    "dist:linux:tgz": "electron-builder --linux dir && node scripts/pack-linux-tgz.js x64",
+    "dist:linux:tgz:arm64": "electron-builder --linux dir --arm64 -c.npmRebuild=false && node scripts/pack-linux-tgz.js arm64"
   },
   "dependencies": {
     "uiohook-napi": "^1.5.0"
@@ -33,7 +36,8 @@
       "overlay/**/*",
       "lib/**/*",
       "media/**/*",
-      "assets/*"
+      "assets/*",
+      "!node_modules/uiohook-napi/build/**"
     ],
     "win": {
       "target": [
@@ -46,6 +50,35 @@
     },
     "portable": {
       "artifactName": "Nibble-Portable-${version}.exe"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "tar.gz",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "executableName": "nibble",
+      "extraFiles": [
+        {
+          "from": "linux/README-Linux.txt",
+          "to": "README-Linux.txt"
+        }
+      ],
+      "category": "Utility",
+      "synopsis": "敲空格 / 回车，桌面上的像素小生物向野生 Bug 发起攻击",
+      "desktop": {
+        "Name": "Nibble",
+        "Comment": "Nibble 桌面伴生版"
+      }
+    },
+    "appImage": {
+      "artifactName": "Nibble-${version}-x86_64.AppImage"
     }
   }
 }

@@ -8,6 +8,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('nibbleOverlay', {
+  platform: process.platform, // 渲染层据此隐藏当前平台不支持的功能（如 Linux 的窗口透明度）
   openPanel: () => ipcRenderer.send('overlay-open-panel'),
   openView: (v) => ipcRenderer.send('overlay-open-view', v), // 直达武器库/怪物库
   collapse: () => ipcRenderer.send('overlay-collapse'), // 展开态收起
@@ -18,6 +19,8 @@ contextBridge.exposeInMainWorld('nibbleOverlay', {
   closeOpacity: () => ipcRenderer.send('overlay-opacity-close'), // 关闭透明度小窗
   openKeyStats: () => ipcRenderer.send('overlay-keystats-open'), // 打开按键统计浮窗
   closeKeyStats: () => ipcRenderer.send('overlay-keystats-close'), // 关闭按键统计浮窗
+  mouseDay: (date) => ipcRenderer.send('mousemap-day', date), // 鼠标轨迹：切换某一天
+  closeMouseMap: () => ipcRenderer.send('overlay-mousemap-close'), // 关闭鼠标轨迹浮窗
   ready: () => ipcRenderer.send('overlay-ready'),
 })
 

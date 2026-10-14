@@ -19,6 +19,16 @@
 
   const isFull = () => document.body.classList.contains('full')
 
+  // Linux：窗口级 setOpacity 未实现（Electron 官方口径「On Linux, does nothing」），
+  // 所以把透明度 UI 全部收起来 —— 与其留一根拖了没反应的滑条，不如不显示。
+  // 主进程侧同样会忽略 opacity 相关 IPC（双保险）。
+  const NO_OPACITY = window.nibbleOverlay.platform === 'linux'
+  if (NO_OPACITY) {
+    const sl = $('o-opacity')
+    if (sl) sl.style.display = 'none'
+    if (canvasP) canvasP.title = '点击打开面板'
+  }
+
   // 弹层窗口以 index.html#full 加载：初始直接显示完整层（不闪紧凑层）
   if (location.hash === '#full') {
     document.body.classList.add('full')
@@ -391,7 +401,7 @@
 
   // 紧凑态滚轮：调透明度（上滚更实 / 下滚更透）
   document.addEventListener('wheel', (e) => {
-    if (isFull()) return
+    if (isFull() || NO_OPACITY) return
     try {
       window.nibbleOverlay.opacityDelta(e.deltaY < 0 ? 0.05 : -0.05)
     } catch { /* 忽略 */ }

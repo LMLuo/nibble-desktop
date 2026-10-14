@@ -1,0 +1,100 @@
+name: linux-arm64 native
+
+# 在真实的 arm64 Linux 上，编译「能装进发行包」的 uiohook-napi 原生模块，并装配出完整的
+# aarch64 发行包。
+#
+# 为什么需要这个 workflow：
+#   uiohook-napi 1.5.5 自带的 prebuilds/linux-arm64/uiohook-napi.node 实测是 x86-64 二进制
+#   （与 linux-x64 那个文件 SHA256 完全相同），而且要求 glibc >= 2.34；麒麟 V10 SP1 这类
+#   国产发行版是 glibc 2.28 —— 结果就是程序能启动、界面正常，但敲空格 / 回车永远没反应。
+#   而 node-gyp 不支持交叉编译原生模块（在 Windows 上打 arm64 包会被 @electron/rebuild
+#   直接拒绝），所以只能在真实的 arm64 Linux 上编。
+#
+# 为什么用 Debian 10 容器：
+#   容器里的 glibc 决定了产物的符号版本下限。在 Ubuntu 24.04（glibc 2.39）上直接编出来的
+#   模块会引用 GLIBC_2.34+，在麒麟上照样加载失败。Debian 10 = glibc 2.28，产出的模块对
+#   glibc >= 2.28 的机器都可用（也就是绝大多数国产发行版与老服务器）。
+#
+# 产物（在 Actions 页面的 Artifacts 里下载）：
+#   uiohook-arm64      —— 单独的原生模块，可用于替换任意 Linux arm64 包里的同名文件
+#   nibble-linux-arm64 —— 已替换好的完整 tar.gz 发行包
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/linux-arm64.yml'
+
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04-arm # 公开仓库免费提供的 arm64 runner
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- 原生模块
+      - name: 在 Debian 10 容器里编译原生模块（glibc 2.28 兼容）
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work arm64v8/debian:buster bash -ec '
+            set -e
+            # Debian 10 已 EOL：包源迁到 archive.debian.org，签名也不再更新
+            sed -i "s|deb.debian.org|archive.debian.org|g; /security.debian.org/d; /buster-updates/d" /etc/apt/sources.list
+            apt-get -o Acquire::Check-Valid-Until=false -o Acquire::AllowInsecureRepositories=true update
+            # 只装编译 binding.gyp 里 Linux 分支真正用到的头文件：
+            #   USE_XRANDR → Xrandr.h      USE_XT → X11/Intrinsic.h
+            #   XRecord / XTest → libxtst  XKBlib / Xlibint / keysym → libx11
+            #   USE_EVDEV → linux/input.h（linux-libc-dev）
+            # Xinerama.h、xcb/xkb.h、xkbcommon/* 都在未定义的宏里，不需要
+            apt-get install -y --no-install-recommends --allow-unauthenticated \
+              gcc make python3 ca-certificates curl xz-utils file \
+              libx11-dev libxrandr-dev libxtst-dev libxt-dev linux-libc-dev
+
+            # 容器本身没有 node，用官方 arm64 包（node-gyp 也复用它下载头文件）
+            curl -fsSL https://nodejs.org/dist/v20.18.1/node-v20.18.1-linux-arm64.tar.xz -o /tmp/node.tar.xz
+            mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1
+            export PATH=/opt/node/bin:$PATH
+
+            # 只取 uiohook-napi 的源码来编译，不碰整个工程（速度快、不受工程依赖影响）
+            mkdir -p /work/.ci-build && cd /work/.ci-build
+            npm install uiohook-napi@1.5.5 --ignore-scripts --no-audit --no-fund
+            cd node_modules/uiohook-napi
+            npx --yes node-gyp@10 rebuild --arch=arm64
+
+            cp build/Release/uiohook_napi.node /work/.ci-build/uiohook_napi.node
+            echo "=================== 产物自检 ==================="
+            file /work/.ci-build/uiohook_napi.node
+            readelf -h /work/.ci-build/uiohook_napi.node | grep -E "Class:|Machine:"
+            echo -n "引用到的 GLIBC 版本上限: "
+            strings /work/.ci-build/uiohook_napi.node | grep -E "^GLIBC_2\." | sort -uV | tail -1
+            echo "==============================================="
+          '
+
+      - name: 上传原生模块
+        uses: actions/upload-artifact@v4
+        with:
+          name: uiohook-arm64
+          path: .ci-build/uiohook_napi.node
+          if-no-files-found: error
+          retention-days: 30
+
+      # ---------------------------------------------------------------- 完整发行包
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装工程依赖
+        run: npm ci
+
+      - name: 替换原生模块并装配 aarch64 发行包
+        run: |
+          cp .ci-build/uiohook_napi.node \
+             node_modules/uiohook-napi/prebuilds/linux-arm64/uiohook-napi.node
+          npm run dist:linux:tgz:arm64
+
+      - name: 上传发行包
+        uses: actions/upload-artifact@v4
+        with:
+          name: nibble-linux-arm64
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30

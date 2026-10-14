@@ -16,6 +16,19 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog } = require('ele
 const path = require('path')
 const fs = require('fs')
 
+// ============================ 平台差异（Linux 移植） ============================
+// 本应用以 Windows 为主、Linux 为次；差异全部收敛在下面几个常量里，别在别处再判断 platform：
+//   - setOpacity：Electron 官方口径「On Linux, does nothing」→ 透明度功能整体隐藏。
+//     宁可让用户看不到这个菜单，也不要给一根拖了没反应的假滑条。
+//   - setLoginItemSettings：仅 macOS / Windows 实现 → Linux 隐藏「开机自启」。
+//   - 全局键盘监听：uiohook 走 X11 的 XRecord，Wayland 会话下（含 XWayland）收不到任何按键
+//     → 启动时明确提示切 X11 会话，否则「敲键盘没反应」会被当成程序坏了。
+const IS_LINUX = process.platform === 'linux'
+const SUPPORTS_OPACITY = !IS_LINUX
+const SUPPORTS_AUTOLAUNCH = !IS_LINUX
+const WAYLAND = IS_LINUX && (process.env.XDG_SESSION_TYPE === 'wayland' ||
+  (!!process.env.WAYLAND_DISPLAY && process.env.XDG_SESSION_TYPE !== 'x11'))
+
 // ⚠️ 本机 GPU 环境与 Electron 合成层的兼容性结论（全部实测）：
 //   - transparent 窗口：resize 白屏 / 禁 GPU 后整个不显示 → 已弃用 transparent（v0.4.0）
 //   - 普通窗口 + GPU：页面帧不提交（只有背景色，全黑）→ GPU 进程崩溃无回退
@@ -125,9 +138,75 @@ function keyStatsAll() {
   return { type: 'keystats-all', days, today: today || { date: todayKey(), space: 0, enter: 0 } }
 }
 
+// ============================ 鼠标轨迹（一天的移动热力 + 点击位置） ============================
+// 采集：移动每 250ms 采样一点（8px 量化，用于连线）；点击全量记录；
+// 热力格 16px 累加计数（移动与点击都计入）。只统计主显示器，滚动保留 7 天。
+// 存储：userData/mousetrack.json（防抖 30s + 退出落盘），只存本机、零联网。
+const MOUSE_SAMPLE_MS = 250
+const mouseDays = { days: {} }
+let mouseDirty = false
+let mouseLastAt = 0
+const mouseTrackPath = () => path.join(app.getPath('userData'), 'mousetrack.json')
+
+function pruneMouseDays() {
+  const keys = Object.keys(mouseDays.days).sort().reverse()
+  for (let i = KEYSTAT_KEEP_DAYS; i < keys.length; i++) delete mouseDays.days[keys[i]]
+}
+
+function loadMouseTrack() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(mouseTrackPath(), 'utf8'))
+    if (parsed && parsed.days && typeof parsed.days === 'object') mouseDays.days = parsed.days
+  } catch { /* 首次 / 损坏 → 空 */ }
+  pruneMouseDays()
+}
+
+function saveMouseTrackIfDirty() {
+  if (!mouseDirty) return
+  mouseDirty = false
+  try {
+    pruneMouseDays()
+    fs.writeFileSync(mouseTrackPath(), JSON.stringify(mouseDays), 'utf8')
+  } catch { /* 忽略 */ }
+}
+
+function recordMouse(x, y, isClick) {
+  try {
+    const day = todayKey()
+    const rec = mouseDays.days[day] || (mouseDays.days[day] = { w: 0, h: 0, cells: {}, path: [], clicks: [] })
+    if (!rec.w) {
+      const b = screen.getPrimaryDisplay().bounds
+      rec.w = b.width
+      rec.h = b.height
+    }
+    const gk = Math.floor(x / 16) + ',' + Math.floor(y / 16)
+    rec.cells[gk] = (Number(rec.cells[gk]) || 0) + 1
+    if (isClick) rec.clicks.push([Math.round(x), Math.round(y)])
+    else rec.path.push([Math.floor(x / 8), Math.floor(y / 8)])
+    mouseDirty = true
+  } catch { /* 忽略 */ }
+}
+
+// 某天的可视化数据（浮窗渲染用）；热力键 "gx,gy"，路径为 8px 量化点，点击为原始坐标
+function mouseMapForDay(date) {
+  const rec = mouseDays.days[date]
+  if (!rec) return { type: 'mousemap', date, empty: true, screen: { w: 1920, h: 1080 }, cells: {}, path: [], clicks: [] }
+  return {
+    type: 'mousemap',
+    date,
+    screen: { w: Number(rec.w) || 1920, h: Number(rec.h) || 1080 },
+    cells: rec.cells || {},
+    path: rec.path || [],
+    clicks: rec.clicks || [],
+  }
+}
+
+const mouseMapDays = () => Object.keys(mouseDays.days).sort().reverse()
+
 // ============================ 全局键盘监听 ============================
 let hook = null
 let attackKeys = null
+let hookErr = '' // 监听失败原因：Linux 上多为 Wayland 会话或缺 libXtst / libX11
 const pressed = new Set() // 判定「长按自动重复」：按住不放只算一次按压
 let lastKeyAttackAt = 0
 
@@ -145,11 +224,64 @@ function startHook() {
       keyboardAttack()
     })
     hook.on('keyup', (e) => pressed.delete(e.keycode))
+    // 鼠标轨迹采集：移动 250ms 采样（高频事件里只做时间差判断，零负担）；点击全量
+    hook.on('mousemove', (e) => {
+      if (paused) return
+      const now = Date.now()
+      if (now - mouseLastAt < MOUSE_SAMPLE_MS) return
+      mouseLastAt = now
+      recordMouse(e.x, e.y, false)
+    })
+    hook.on('click', (e) => {
+      if (paused) return
+      recordMouse(e.x, e.y, true)
+    })
     hook.start()
+    // Wayland 下 uiohook 能「启动成功」却永远收不到事件（XRecord 看不到原生 Wayland 应用），
+    // 必须主动标记，否则用户只会觉得「程序坏了，敲了没反应」
+    hookErr = WAYLAND ? '当前是 Wayland 会话：X11 的 XRecord 收不到原生 Wayland 应用的按键' : ''
   } catch (err) {
     // 原生监听不可用时游戏照常：面板「攻击一次」按钮仍可用
-    console.error('[nibble] 全局键盘监听不可用：', err && err.message)
+    hookErr = (err && err.message) || String(err)
+    console.error('[nibble] 全局键盘监听不可用：', hookErr)
   }
+}
+
+// 监听不可用时的「为什么敲键盘没反应」说明（托盘入口 + 首启提示共用同一段文案）
+function hookTroubleDetail() {
+  const head = IS_LINUX
+    ? 'Nibble 在 Linux 上通过 X11 的 XRecord 扩展读取全局按键，以下情况会导致收不到按键：\n\n' +
+      (WAYLAND ? '1. 当前登录的是 Wayland 会话（本次启动已检测到）——\n   请在登录界面右下角齿轮里选择「X11 / Xorg 会话」重新登录。\n' : '') +
+      '2. 系统缺少 X11 运行库（libX11 / libXtst / libXinerama）——\n   请安装后重启 Nibble。\n'
+    : '可能被杀毒 / 安全软件拦截了键盘钩子。\n'
+  return head + '\n技术细节：' + (hookErr || '(无错误信息，但钩子未生效)') +
+    '\n\n提示：即便监听不可用，托盘菜单「直达 → 攻击一次」与面板里的攻击按钮仍然可用。'
+}
+
+// Wayland 会话：首启弹窗说明一次（之后长期靠托盘那条入口），并在悬浮日志留一行短提示
+function warnWaylandOnce() {
+  if (!WAYLAND) return
+  try {
+    const s = sp.loadSave()
+    s.lastLog = '⚠️ Wayland 会话：请改用 X11 登录'
+    s.logKind = 'idle'
+    sp.saveSave()
+  } catch { /* 忽略 */ }
+  if (config.waylandWarned) return
+  config.waylandWarned = true
+  saveConfig()
+  dialog.showMessageBox({
+    type: 'warning',
+    title: 'Nibble 需要 X11 会话',
+    message: '当前是 Wayland 桌面会话，Nibble 收不到全局按键',
+    detail:
+      'Nibble 通过 X11 的 XRecord 扩展读取键盘（只看空格 / 回车，不记录其他按键），' +
+      '而 Wayland 出于安全设计不允许任何程序监听全局按键。\n\n' +
+      '解决办法：注销 → 在登录界面右下角的会话菜单里选择「X11」或「Ubuntu on Xorg」→ 重新登录。\n' +
+      '（只需设置一次，之后 Nibble 就能正常工作）\n\n' +
+      '在切换之前，托盘菜单「直达 → 攻击一次」和面板里的攻击按钮仍然可用。',
+    buttons: ['知道了'],
+  })
 }
 
 function keyboardAttack() {
@@ -495,6 +627,9 @@ function applyOverlayVisibility() {
 
 let opacitySaveTimer = null
 function setOverlayOpacity(v) {
+  // Linux：setOpacity 是空操作（Electron 未实现），滚轮/滑条一律忽略且不落盘，
+  // 免得配置里存着一个永远不生效的值，换回 Windows 时突然变半透明
+  if (!SUPPORTS_OPACITY) return
   try {
     config.overlayOpacity = Math.min(1, Math.max(0.01, Number(v) || 1)) // 1%~100% 自定义
     applyOverlayVisibility()
@@ -606,6 +741,62 @@ ipcMain.on('overlay-keystats-close', () => {
   } catch { /* 忽略 */ }
 })
 
+// —— 鼠标轨迹浮窗（发光热力 + 淡连线 + 点击亮点，近 7 天切换）——
+let mouseMapWin = null
+function toggleMouseMapWindow() {
+  try {
+    if (mouseMapWin && !mouseMapWin.isDestroyed()) {
+      mouseMapWin.close()
+      return
+    }
+    const W = 680
+    const H = 430
+    const wa = screen.getPrimaryDisplay().workArea
+    const x = Math.min(Math.max(wa.x + Math.round((wa.width - W) / 2), wa.x), wa.x + wa.width - W)
+    const y = Math.min(Math.max(wa.y + Math.round((wa.height - H) / 3), wa.y), wa.y + wa.height - H)
+    mouseMapWin = new BrowserWindow({
+      width: W,
+      height: H,
+      x,
+      y,
+      frame: false,
+      backgroundColor: '#171210',
+      resizable: false,
+      alwaysOnTop: config.alwaysOnTop !== false,
+      skipTaskbar: true,
+      hasShadow: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+    mouseMapWin.setAlwaysOnTop(config.alwaysOnTop !== false, 'screen-saver')
+    mouseMapWin.loadFile(path.join(__dirname, 'overlay', 'mousemap.html'))
+    mouseMapWin.webContents.on('did-finish-load', () => {
+      try {
+        const days = mouseMapDays()
+        mouseMapWin.webContents.send('push', {
+          type: 'mousemap-init',
+          days,
+          data: mouseMapForDay(days[0] || todayKey()),
+        })
+      } catch { /* 忽略 */ }
+    })
+    mouseMapWin.on('closed', () => { mouseMapWin = null })
+  } catch { /* 忽略 */ }
+}
+ipcMain.on('mousemap-day', (_e, date) => {
+  try {
+    if (mouseMapWin && !mouseMapWin.isDestroyed()) mouseMapWin.webContents.send('push', mouseMapForDay(String(date || '')))
+  } catch { /* 忽略 */ }
+})
+ipcMain.on('overlay-mousemap-close', () => {
+  try {
+    if (mouseMapWin && !mouseMapWin.isDestroyed()) mouseMapWin.close()
+  } catch { /* 忽略 */ }
+})
+
 // ============================ 托盘 ============================
 const exeForLogin = () => process.env.PORTABLE_EXECUTABLE_FILE || app.getPath('exe')
 
@@ -669,8 +860,9 @@ function trayMenu() {
         tray.setContextMenu(trayMenu())
       },
     },
-    { label: '透明度调节…', click: () => toggleOpacityWindow() },
+    SUPPORTS_OPACITY ? { label: '透明度调节…', click: () => toggleOpacityWindow() } : null,
     { label: '按键统计…', click: () => toggleKeyStatsWindow() },
+    { label: '鼠标轨迹…', click: () => toggleMouseMapWindow() },
     {
       label: '暂停键盘攻击（空格 / 回车）',
       type: 'checkbox',
@@ -684,16 +876,32 @@ function trayMenu() {
       label: '攻击间隔',
       submenu: INTERVAL_CHOICES.map(intervalItem),
     },
-    {
-      label: '开机自启',
-      type: 'checkbox',
-      checked: getAutoLaunch(),
-      click: (item) => {
-        setAutoLaunch(item.checked)
-        tray.setContextMenu(trayMenu())
-      },
-    },
+    SUPPORTS_AUTOLAUNCH
+      ? {
+          label: '开机自启',
+          type: 'checkbox',
+          checked: getAutoLaunch(),
+          click: (item) => {
+            setAutoLaunch(item.checked)
+            tray.setContextMenu(trayMenu())
+          },
+        }
+      : null,
     { type: 'separator' },
+    hookErr
+      ? {
+          label: '⚠️ 键盘监听不可用（点这里看原因）',
+          click: () => {
+            dialog.showMessageBox({
+              type: 'warning',
+              title: '全局键盘监听不可用',
+              message: '敲空格 / 回车目前无法被 Nibble 捕获',
+              detail: hookTroubleDetail(),
+              buttons: ['好'],
+            })
+          },
+        }
+      : null,
     {
       label: '关于 Nibble',
       click: () => {
@@ -705,7 +913,10 @@ function trayMenu() {
             '敲空格 / 回车，桌面上那只像素小生物就会向野生 Bug 发动攻击。\n\n' +
             '项目主页：https://github.com/LMLuo/nibble-desktop\n' +
             '游戏设定与像素素材来自 nibble（IDE 扩展版）。\n\n' +
-            'MIT License · 零联网 · 无统计',
+            'MIT License · 零联网 · 无统计' +
+            (IS_LINUX
+              ? '\n\nLinux 版：全局按键依赖 X11 会话，当前会话为 ' + (WAYLAND ? 'Wayland（监听不可用）' : 'X11') + '。'
+              : ''),
           buttons: ['好'],
         })
       },
@@ -717,7 +928,7 @@ function trayMenu() {
         app.quit()
       },
     },
-  ])
+  ].filter(Boolean)) // null = 当前平台不支持 / 当前状态不适用，直接滤掉
 }
 
 function createTray() {
@@ -728,6 +939,10 @@ function createTray() {
     tray.on('double-click', () => openPanelView())
   } catch (err) {
     console.error('[nibble] 托盘创建失败：', err && err.message)
+    // 托盘是唯一的常规入口（Linux 上没有 AppIndicator 时真会创建失败）：
+    // 强制把悬浮窗留在桌面上，免得变成「看不见、也退不掉」的进程
+    tray = null
+    config.showOverlay = true
   }
 }
 
@@ -825,10 +1040,14 @@ if (!gotLock && !diagOn) {
   app.whenReady().then(() => {
     loadConfig()
     loadKeyStats()
-    setInterval(saveKeyStatsIfDirty, 30000) // 计数防抖落盘
+    loadMouseTrack()
+    setInterval(() => {
+      saveKeyStatsIfDirty() // 键盘计数防抖落盘
+      saveMouseTrackIfDirty() // 鼠标轨迹防抖落盘
+    }, 30000)
     createOverlay()
+    startHook() // 必须早于 createTray：监听失败时托盘要多出一条「键盘监听不可用」入口
     createTray()
-    startHook()
 
     // 首次启动：写配置文件（此后 isFirstRun 为 false）+ 自动展开一次面板 + 一句欢迎
     if (isFirstRun()) {
@@ -845,6 +1064,7 @@ if (!gotLock && !diagOn) {
       openPanelView()
     }
 
+    warnWaylandOnce() // 放在首次启动之后：Wayland 警告要盖过欢迎语（它更紧急）
     applyOverlayVisibility()
     setInterval(tick, 100) // 10fps 节拍：像素动画（呼吸/前冲/消散）顺滑
     tick()
@@ -860,6 +1080,19 @@ if (!gotLock && !diagOn) {
         bumpKeyStat('enter')
         diagLog('bumpKeyStat x3 done')
       }, 2000)
+      // 模拟鼠标轨迹并打开轨迹浮窗（NIBBLE_DIAG_MOUSEMAP=1）
+      if (process.env.NIBBLE_DIAG_MOUSEMAP) {
+        setTimeout(() => {
+          for (let i = 0; i < 260; i++) {
+            recordMouse(300 + i * 5, 420 + Math.round(Math.sin(i / 11) * 230), false)
+          }
+          for (let i = 0; i < 14; i++) recordMouse(760 + i * 42, 720, true)
+          const rec = mouseDays.days[todayKey()] || {}
+          diagLog('mouse sim done, cells=' + Object.keys(rec.cells || {}).length + ' path=' + ((rec.path || []).length) + ' clicks=' + ((rec.clicks || []).length))
+          toggleMouseMapWindow()
+          diagLog('mousemap win=' + JSON.stringify(mouseMapWin && !mouseMapWin.isDestroyed() ? mouseMapWin.getBounds() : null))
+        }, 3200)
+      }
       const expandTarget = process.env.NIBBLE_DIAG_EXPAND
       if (expandTarget) {
         setTimeout(() => {
@@ -935,6 +1168,26 @@ if (!gotLock && !diagOn) {
             } else {
               diagLog('viewWin missing at capture time')
             }
+            // 鼠标轨迹浮窗（若打开）
+            if (mouseMapWin && !mouseMapWin.isDestroyed()) {
+              const img3 = await Promise.race([
+                mouseMapWin.webContents.capturePage(),
+                new Promise((r) => setTimeout(() => r(null), 5000)),
+              ])
+              if (img3) {
+                const out3 = (diagOut || path.join(app.getPath('temp'), 'nibble-diag.png')).replace(/\.png$/, '-map.png')
+                fs.writeFileSync(out3, img3.toPNG())
+                diagLog('capture map: ' + out3 + ' ' + img3.getSize().width + 'x' + img3.getSize().height)
+              }
+              const probe3 = await mouseMapWin.webContents.executeJavaScript(`JSON.stringify({
+                days: document.querySelectorAll('.day').length,
+                label: (document.getElementById('dateLabel') || {}).textContent,
+                cv: (function (c) { return c ? { w: c.width, h: c.height } : null })(document.getElementById('cv'))
+              })`)
+              diagLog('probe map: ' + probe3)
+            } else {
+              diagLog('mouseMapWin missing at capture time')
+            }
           } else {
             diagLog('overlayWin missing at capture time')
           }
@@ -952,6 +1205,7 @@ if (!gotLock && !diagOn) {
   app.on('before-quit', () => {
     quitting = true
     saveKeyStatsIfDirty() // 退出前落盘未保存的敲击计数
+    saveMouseTrackIfDirty() // 与鼠标轨迹
     try {
       if (hook) hook.stop()
     } catch { /* 忽略 */ }
